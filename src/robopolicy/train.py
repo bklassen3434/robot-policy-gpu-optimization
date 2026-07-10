@@ -43,7 +43,7 @@ def make_optimizer(model: ACT, tcfg: dict) -> torch.optim.Optimizer:
     return torch.optim.AdamW(groups, weight_decay=tcfg.get("weight_decay", 1e-4))
 
 
-def train(config_path: str, overfit_one_batch: bool = False) -> None:
+def train(config_path: str, overfit_one_batch: bool = False, resume: bool = False) -> None:
     cfg = load_config(config_path)
     tcfg = cfg["train"]
     set_seed(tcfg["seed"])
@@ -73,10 +73,23 @@ def train(config_path: str, overfit_one_batch: bool = False) -> None:
                 print(f"step {step:4d} | loss {out['loss'].item():.4f} | l1 {out['l1'].item():.4f}")
         return
 
+    ckpt_path = out_dir / "last.pt"
+    start_step = 0
+    if resume:
+        if ckpt_path.exists():
+            start_step = _load_for_resume(model, opt, ckpt_path, device)
+            print(f"resumed from {ckpt_path} at step {start_step}")
+        else:
+            print(f"--resume set but {ckpt_path} not found; starting from step 0.")
+
     model.train()
     steps = tcfg["steps"]
+    if start_step >= steps:
+        print(f"checkpoint already at step {start_step} >= target {steps}; nothing to do.")
+        return
+
     loader = itertools.cycle(train_loader)
-    for step in range(1, steps + 1):
+    for step in range(start_step + 1, steps + 1):
         batch = move_to(next(loader), device)
         opt.zero_grad()
         out = model.compute_loss(batch)
@@ -90,22 +103,39 @@ def train(config_path: str, overfit_one_batch: bool = False) -> None:
                 msg += f" | kld {out['kld'].item():.4f}"
             print(msg)
         if step % tcfg.get("save_every", 10000) == 0:
-            _save(model, meta, out_dir / "last.pt")
+            _save(model, meta, ckpt_path, optimizer=opt, step=step)
         if step % tcfg.get("eval_every", 20000) == 0:
             _validate(model, val_loader, device)
 
-    _save(model, meta, out_dir / "last.pt")
+    _save(model, meta, ckpt_path, optimizer=opt, step=steps)
 
 
-def _save(model: ACT, meta: dict, path: Path) -> None:
-    torch.save(
-        {"model": model.state_dict(), "cfg": model.cfg.__dict__, "meta_keys": {
+def _save(model: ACT, meta: dict, path: Path, optimizer=None, step: int = 0) -> None:
+    ckpt = {
+        "model": model.state_dict(),
+        "cfg": model.cfg.__dict__,
+        "step": step,
+        "meta_keys": {
             "state_dim": meta["state_dim"], "action_dim": meta["action_dim"],
             "n_cameras": meta["n_cameras"], "image_keys": meta["image_keys"],
-        }},
-        path,
-    )
-    print(f"saved -> {path}")
+        },
+    }
+    if optimizer is not None:
+        ckpt["optimizer"] = optimizer.state_dict()
+    torch.save(ckpt, path)
+    print(f"saved -> {path} (step {step})")
+
+
+def _load_for_resume(model: ACT, optimizer, path: Path, device) -> int:
+    """Restore model + optimizer state; return the step to resume after."""
+    ckpt = torch.load(path, map_location=device)
+    model.load_state_dict(ckpt["model"])
+    if "optimizer" in ckpt:
+        optimizer.load_state_dict(ckpt["optimizer"])
+    else:
+        print("WARNING: checkpoint has no optimizer state (pre-resume format); "
+              "AdamW momentum restarts from zero.")
+    return int(ckpt.get("step", 0))
 
 
 @torch.no_grad()
@@ -129,8 +159,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--overfit-one-batch", action="store_true")
+    ap.add_argument("--resume", action="store_true", help="resume from outputs/last.pt if present")
     args = ap.parse_args()
-    train(args.config, overfit_one_batch=args.overfit_one_batch)
+    train(args.config, overfit_one_batch=args.overfit_one_batch, resume=args.resume)
 
 
 if __name__ == "__main__":
