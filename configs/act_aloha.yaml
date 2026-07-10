@@ -1,0 +1,50 @@
+# ACT on aloha_sim_transfer_cube_human. Hyperparameters mirror the official
+# LeRobot ACT config so "match the official accuracy" is apples-to-apples.
+
+dataset:
+  repo_id: lerobot/aloha_sim_transfer_cube_human
+  # camera keys present in this dataset; overridden at runtime from metadata if absent
+  image_keys: [observation.images.top]
+  state_key: observation.state
+  action_key: action
+  val_fraction: 0.1
+
+model:
+  # transformer
+  dim_model: 512
+  n_heads: 8
+  dim_feedforward: 3200
+  n_encoder_layers: 4
+  n_decoder_layers: 1        # official ACT is effectively 1; kept for parity
+  dropout: 0.1
+  feedforward_activation: relu
+  pre_norm: false            # DETR-style post-norm
+  # CVAE
+  use_vae: true
+  latent_dim: 32
+  n_vae_encoder_layers: 4
+  kl_weight: 10.0
+  # action chunking
+  chunk_size: 100
+  n_action_steps: 100
+  # vision backbone
+  vision_backbone: resnet18
+  pretrained_backbone: true
+
+train:
+  batch_size: 8
+  lr: 1.0e-5
+  lr_backbone: 1.0e-5
+  weight_decay: 1.0e-4
+  grad_clip_norm: 10.0
+  steps: 100000
+  eval_every: 20000
+  save_every: 10000
+  seed: 1000
+  device: auto               # auto -> cuda, else mps, else cpu
+  amp: false
+
+eval:
+  n_episodes: 50
+  max_episode_steps: 400
+  temporal_ensemble: false   # official inference option; off by default here

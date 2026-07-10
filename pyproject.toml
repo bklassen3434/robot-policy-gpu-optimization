@@ -1,0 +1,36 @@
+[project]
+name = "robopolicy"
+version = "0.1.0"
+description = "A transformer robot-arm policy built from scratch in PyTorch, accelerated with a custom CUDA kernel."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.2",
+    "torchvision>=0.17",
+    "numpy>=1.24",
+    "einops>=0.7",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+# Heavy deps only needed to actually load LeRobot data / run sim eval.
+# Install with:  pip install -e ".[data]"
+data = [
+    "lerobot>=0.1",
+    "gym-aloha>=0.1",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "kernels", "evals"]
+addopts = "-q"
