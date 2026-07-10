@@ -28,6 +28,9 @@ overfit:
 train:
 	python -m robopolicy.train --config configs/act_aloha.yaml
 
+resume:
+	python -m robopolicy.train --config configs/act_aloha.yaml --resume
+
 eval:
 	python -m robopolicy.eval --config configs/act_aloha.yaml --checkpoint outputs/last.pt
 
