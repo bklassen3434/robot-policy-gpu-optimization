@@ -1,0 +1,9 @@
+# Extra requirements for the rented A100/H100 box (CUDA).
+# Install AFTER a CUDA build of torch is present:
+#   pip install -e ".[data,dev]"
+#   pip install -r requirements-gpu.txt
+#
+# ninja is required by torch.utils.cpp_extension to compile the custom kernel.
+ninja>=1.11
+# triton ships with CUDA torch, listed for clarity (used for baseline comparisons).
+# triton>=2.2

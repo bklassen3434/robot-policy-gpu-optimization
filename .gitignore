@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# PyTorch / CUDA build artifacts
+*.so
+*.o
+*.ptx
+*.cubin
+kernels/build/
+*.ninja*
+.ninja_deps
+.ninja_log
+
+# Data, checkpoints, logs
+data/
+outputs/
+checkpoints/
+runs/
+wandb/
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+
+# Profiling artifacts
+*.nsys-rep
+*.qdrep
+*.sqlite
+*.ncu-rep
+profiling/reports/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.context/
