@@ -34,7 +34,7 @@ model:
 
 train:
   batch_size: 8
-  num_workers: 4             # safe now: images come from a memmap cache, no video decode in workers
+  num_workers: 0             # cache makes decode-free loading fast in-process; 0 workers => no /dev/shm use
   lr: 1.0e-5
   lr_backbone: 1.0e-5
   weight_decay: 1.0e-4
