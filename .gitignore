@@ -20,7 +20,8 @@ kernels/build/
 .ninja_log
 
 # Data, checkpoints, logs
-data/
+# Anchored to repo root so it does NOT match the src/robopolicy/data package.
+/data/
 outputs/
 checkpoints/
 runs/
