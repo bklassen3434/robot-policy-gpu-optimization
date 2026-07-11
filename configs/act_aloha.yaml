@@ -34,6 +34,7 @@ model:
 
 train:
   batch_size: 8
+  num_workers: 4             # DataLoader workers (file_system sharing avoids /dev/shm limits)
   lr: 1.0e-5
   lr_backbone: 1.0e-5
   weight_decay: 1.0e-4
