@@ -34,7 +34,7 @@ model:
 
 train:
   batch_size: 8
-  num_workers: 0             # decode in-process; PyAV video decoding segfaults in forked workers
+  num_workers: 4             # safe now: images come from a memmap cache, no video decode in workers
   lr: 1.0e-5
   lr_backbone: 1.0e-5
   weight_decay: 1.0e-4
