@@ -10,7 +10,6 @@ correctness check that runs on CPU/MPS without the GPU box.
 from __future__ import annotations
 
 import argparse
-import itertools
 from pathlib import Path
 
 import torch
@@ -93,24 +92,35 @@ def train(config_path: str, overfit_one_batch: bool = False, resume: bool = Fals
         print(f"checkpoint already at step {start_step} >= target {steps}; nothing to do.")
         return
 
-    loader = itertools.cycle(train_loader)
-    for step in range(start_step + 1, steps + 1):
-        batch = move_to(next(loader), device)
-        opt.zero_grad()
-        out = model.compute_loss(batch)
-        out["loss"].backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        opt.step()
+    # Epoch loop over the DataLoader. Do NOT use itertools.cycle(train_loader):
+    # cycle() retains a copy of every batch it yields, so each batch's tensors are
+    # never freed -> a ~one-batch-per-step leak that fills /dev/shm (num_workers>0)
+    # or RAM (num_workers=0) and kills training. Re-iterating the loader per epoch
+    # reshuffles and lets each batch be freed after its step.
+    save_every = tcfg.get("save_every", 10000)
+    eval_every = tcfg.get("eval_every", 20000)
+    step = start_step
+    while step < steps:
+        for raw in train_loader:
+            step += 1
+            batch = move_to(raw, device)
+            opt.zero_grad()
+            out = model.compute_loss(batch)
+            out["loss"].backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            opt.step()
 
-        if step % 100 == 0:
-            msg = f"step {step}/{steps} | loss {out['loss'].item():.4f} | l1 {out['l1'].item():.4f}"
-            if "kld" in out:
-                msg += f" | kld {out['kld'].item():.4f}"
-            print(msg)
-        if step % tcfg.get("save_every", 10000) == 0:
-            _save(model, meta, ckpt_path, optimizer=opt, step=step)
-        if step % tcfg.get("eval_every", 20000) == 0:
-            _validate(model, val_loader, device)
+            if step % 100 == 0:
+                msg = f"step {step}/{steps} | loss {out['loss'].item():.4f} | l1 {out['l1'].item():.4f}"
+                if "kld" in out:
+                    msg += f" | kld {out['kld'].item():.4f}"
+                print(msg)
+            if step % save_every == 0:
+                _save(model, meta, ckpt_path, optimizer=opt, step=step)
+            if step % eval_every == 0:
+                _validate(model, val_loader, device)
+            if step >= steps:
+                break
 
     _save(model, meta, ckpt_path, optimizer=opt, step=steps)
 
