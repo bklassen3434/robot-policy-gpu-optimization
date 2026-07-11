@@ -124,19 +124,26 @@ def build_dataloaders(cfg: dict, seed: int = 0):
     # backend needs system FFmpeg libs and is ABI-pinned to a specific torch build.
     video_backend = dcfg.get("video_backend", "pyav")
 
-    # first open the dataset to read fps + feature keys
-    probe = LeRobotDataset(repo_id, video_backend=video_backend)
-    fps = probe.fps
-    features = list(probe.features)
+    # Open once (single frames, no delta_timestamps) for metadata + one-time decode.
+    base = LeRobotDataset(repo_id, video_backend=video_backend)
+    fps = base.fps
+    features = list(base.features)
     image_keys = dcfg.get("image_keys") or [k for k in features if k.startswith("observation.images")]
 
-    # chunk of future actions
-    delta_timestamps = {action_key: [i / fps for i in range(chunk)]}
-    ds = LeRobotDataset(repo_id, delta_timestamps=delta_timestamps, video_backend=video_backend)
-
-    normalizer = Normalizer.from_stats(ds.meta.stats, state_key, action_key)
+    normalizer = Normalizer.from_stats(base.meta.stats, state_key, action_key)
     state_dim = normalizer.state_mean.numel()
     action_dim = normalizer.action_mean.numel()
+
+    # Decode-once image cache -> fork-safe, GPU-bound training (see data/cache.py).
+    from .cache import CachedACTDataset, build_or_load_cache
+
+    cache_dir = dcfg.get("cache_dir", "outputs/cache")
+    images, states, actions, episode_index, _ = build_or_load_cache(
+        base, image_keys, state_key, action_key, cache_dir
+    )
+    ds = CachedACTDataset(
+        images, states, actions, episode_index, image_keys, state_key, action_key, chunk
+    )
 
     # train / val split
     n = len(ds)
