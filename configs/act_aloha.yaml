@@ -8,6 +8,7 @@ dataset:
   state_key: observation.state
   action_key: action
   val_fraction: 0.1
+  video_backend: pyav        # decode video frames with PyAV (see data/dataset.py)
 
 model:
   # transformer

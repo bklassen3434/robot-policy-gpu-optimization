@@ -16,7 +16,7 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
     except Exception as exc:  # pragma: no cover - import guard for local Macs
         raise SystemExit(
             "Could not import lerobot. Install the data extra:\n"
@@ -25,7 +25,7 @@ def main() -> None:
         )
 
     print(f"Downloading {args.repo_id} ...")
-    ds = LeRobotDataset(args.repo_id)
+    ds = LeRobotDataset(args.repo_id, video_backend="pyav")
     print(f"Done. {ds.num_episodes} episodes, {ds.num_frames} frames.")
     print("Features:", list(ds.features))
 

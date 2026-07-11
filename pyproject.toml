@@ -17,8 +17,11 @@ dependencies = [
 # Heavy deps only needed to actually load LeRobot data / run sim eval.
 # Install with:  pip install -e ".[data]"
 data = [
-    "lerobot>=0.1",
+    # `[dataset]` pulls HuggingFace `datasets` (an optional extra since lerobot 0.6).
+    "lerobot[dataset]>=0.6",
     "gym-aloha>=0.1",
+    # PyAV video backend for decoding frames (avoids the torchcodec/FFmpeg ABI issues).
+    "av>=12",
 ]
 dev = [
     "pytest>=8.0",
