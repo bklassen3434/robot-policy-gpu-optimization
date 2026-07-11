@@ -18,11 +18,10 @@ import torch
 from .model import ACT, ACTConfig
 from .utils import load_config, move_to, resolve_device, set_seed
 
-# DataLoader workers pass image tensors between processes via shared memory
-# (/dev/shm), which is tiny (64 MB) in most Docker/RunPod containers and gets
-# exhausted by large video frames -> "Bus error / No space left on device".
-# The file_system strategy backs that sharing with regular temp files instead.
-torch.multiprocessing.set_sharing_strategy("file_system")
+# NOTE: we deliberately do NOT set the "file_system" sharing strategy — it leaks
+# shared-memory files that accumulate until /dev/shm fills (crash ~step 2000).
+# With the decode-once image cache, num_workers=0 needs no inter-process tensor
+# sharing at all (see configs), so /dev/shm is never touched.
 
 
 def build_model_from_meta(cfg: dict, meta: dict) -> ACT:
