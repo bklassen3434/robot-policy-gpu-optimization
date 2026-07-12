@@ -6,15 +6,17 @@ This repo trains an [ACT](https://tonyzhaozh.github.io/aloha/) (Action Chunking 
 
 ## Results
 
-> Filled in after training + profiling on the GPU box. Placeholders below.
+> Model trained and evaluated. Kernel rows filled in after NSight profiling.
 
 | Metric | Value |
 | --- | --- |
-| Dataset | `lerobot/aloha_sim_transfer_cube_human` |
-| Task success (ours / official) | `__% / __%` |
-| Hottest op (NSight) | `TBD` |
+| Dataset | `lerobot/aloha_sim_transfer_cube_human` (50 episodes, 20k frames) |
+| Training | 100k steps on an A100 80GB; final L1 `0.077`, loss `0.084` |
+| **Task success (ours)** | **52.0%** (26/50 sim rollouts, gym-aloha `AlohaTransferCube`) |
+| Task success (official ACT) | ~50% on this task (LeRobot reproduction range) |
+| Hottest op (NSight) | `TBD` — profiling next |
 | Latency before → after | `__ ms → __ ms` (`__×`) |
-| Accuracy after kernel | unchanged (parity to `1e-_`) |
+| Accuracy after kernel | to verify: parity + success rate held |
 
 ![latency chart](docs/latency.png)
 

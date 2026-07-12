@@ -6,7 +6,13 @@
 
 - What ACT is in two sentences; why a transformer fits action-chunking.
 - What I implemented by hand (MHA, enc/dec, CVAE, pos embeddings) vs reused (ResNet-18 backbone).
-- Training result: matched the official success rate (`__%` vs `__%`) on `aloha_sim_transfer_cube_human`.
+- **Training result:** 100k steps on an A100 80GB, final action L1 `0.077` / loss `0.084`.
+  Sim eval: **52.0% success (26/50)** on gym-aloha `AlohaTransferCube` — in line with the
+  official ACT reproduction (~50%) on `aloha_sim_transfer_cube_human`.
+- **Data pipeline note (worth a paragraph):** LeRobot stores frames as video; per-step PyAV
+  decode was slow and not fork/-spawn-safe (crashed training). Fixed by decoding every frame
+  once into an 18 GB `uint8` memmap cache (`data/cache.py`) → fork-safe, GPU-bound training
+  (~1.7 → ~15 steps/s). Good example of finding and fixing the real systems bottleneck.
 
 ## 2. Finding the hotspot (NSight)
 
