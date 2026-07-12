@@ -4,6 +4,33 @@ One-line pitch: *Built a transformer from scratch, wrote a custom CUDA kernel to
 
 The three places the real signal lives — and where to spend the most time — are the **from-scratch model** (`src/robopolicy/model`), the **CUDA kernel** (`kernels/`), and the **writeup** (`docs/writeup.md`).
 
+## Current status (2026-07-12)
+
+**Phase 1 (build + train + eval) — DONE.**
+- From-scratch ACT transformer implemented and unit-tested.
+- Trained 100k steps on an A100 80GB: final L1 `0.077`, loss `0.084`.
+- **Sim eval: 52.0% success (26/50)** on gym-aloha `AlohaTransferCube` — a working policy, in line with the official ACT reproduction (~50%).
+- Trained checkpoint backed up locally at `~/runpod_checkpoints/robot-policy-gpu/last.pt` (620 MB, byte-verified).
+
+**Phase 2 (profile + kernel + prove) — NEXT. This is the high-signal half.**
+1. **Profile** — restart a GPU pod, re-upload the checkpoint, `bash profiling/run_nsight.sh` → find the single hottest op (steps 5).
+2. **CUDA kernel** — rewrite that op in `kernels/` (fuse or hand-tune), keep output identical (step 6).
+3. **Benchmark** — `kernels/bench.py`, report before→after latency (step 7).
+4. **Accuracy held** — `evals/test_accuracy_regression.py`: kernel parity + re-run sim eval, confirm 52% holds (step 8).
+5. **Writeup + latency chart** — `docs/writeup.md`, `docs/latency.png` (step 9); can be done locally.
+
+### To resume on a fresh GPU pod
+Old EU-RO-1 network volume was deleted, so any region works now:
+```bash
+cd /workspace && git clone https://github.com/bklassen3434/robot-policy-gpu-optimization.git
+cd robot-policy-gpu-optimization && bash scripts/runpod_setup.sh
+# upload the backed-up checkpoint from the Mac to outputs/last.pt (scp via the pod's direct TCP SSH), then:
+make eval     # sanity: should reproduce ~52%
+make profile  # NSight -> hottest op
+```
+Eval needs `MUJOCO_GL=egl PYOPENGL_PLATFORM=egl` and the GLVND EGL loader
+(`apt-get install -y libegl1 libglvnd0 libgles2 libgl1`) for headless MuJoCo.
+
 ## Decisions (locked)
 
 - **Policy:** ACT (Action Chunking Transformer). LeRobot's flagship *transformer* policy, so "match the official accuracy" is a concrete, citable target.
