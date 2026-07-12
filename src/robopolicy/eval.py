@@ -99,7 +99,7 @@ def _obs_to_batch(obs, image_keys, normalizer, device):
         t = torch.as_tensor(np.asarray(img), dtype=torch.float32, device=device) / 255.0
         cams.append(t.permute(2, 0, 1))  # CHW
     images = torch.stack(cams, dim=0).unsqueeze(0)  # (1, n_cam, 3, H, W)
-    images = Normalizer.normalize_image(images)
+    images = normalizer.normalize_image(images)  # staticmethod; call on the passed instance
     return {
         "observation.state": normalizer.normalize_state(state),
         "observation.images": images,
