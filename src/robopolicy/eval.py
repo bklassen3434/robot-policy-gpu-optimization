@@ -104,18 +104,26 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True)
     ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--no-sim", action="store_true", help="skip the sim rollout, only val L1")
+    ap.add_argument("--no-sim", action="store_true", help="skip the sim rollout")
+    ap.add_argument("--with-val-l1", action="store_true",
+                    help="also compute val L1 (builds the image cache; slow)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     device = resolve_device(cfg["train"].get("device", "auto"))
     model, _ = load_checkpoint(args.checkpoint, device)
 
-    from .data import build_dataloaders
+    # Cheap metadata path (normalizer + dims), no image cache — enough for sim rollout.
+    from .data import build_meta
 
-    _, val_loader, meta = build_dataloaders(cfg, seed=cfg["train"]["seed"])
-    val_l1 = eval_val_l1(model, val_loader, device)
-    print(f"validation L1: {val_l1:.4f}")
+    meta = build_meta(cfg)
+
+    if args.with_val_l1:
+        from .data import build_dataloaders
+
+        _, val_loader, _ = build_dataloaders(cfg, seed=cfg["train"]["seed"])
+        val_l1 = eval_val_l1(model, val_loader, device)
+        print(f"validation L1: {val_l1:.4f}")
 
     if not args.no_sim:
         success = eval_sim_success(model, cfg, meta, device)

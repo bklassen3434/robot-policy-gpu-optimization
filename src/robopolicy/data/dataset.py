@@ -99,6 +99,35 @@ def collate_batch(samples, image_keys, state_key, action_key, normalizer):
     return make_collate(image_keys, state_key, action_key, normalizer)(samples)
 
 
+def build_meta(cfg: dict) -> dict:
+    """Cheap metadata-only path: normalizer + dims from dataset stats, NO image cache.
+
+    Used by eval's sim rollout, which needs the ``Normalizer`` and ``image_keys`` but
+    not the decoded-image cache (that's only for training). Avoids the ~25 min cache
+    rebuild when all we want is to roll the policy out in the simulator.
+    """
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+    dcfg = cfg["dataset"]
+    repo_id = dcfg["repo_id"]
+    state_key = dcfg["state_key"]
+    action_key = dcfg["action_key"]
+    video_backend = dcfg.get("video_backend", "pyav")
+
+    base = LeRobotDataset(repo_id, video_backend=video_backend)
+    features = list(base.features)
+    image_keys = dcfg.get("image_keys") or [k for k in features if k.startswith("observation.images")]
+    normalizer = Normalizer.from_stats(base.meta.stats, state_key, action_key)
+    return {
+        "state_dim": normalizer.state_mean.numel(),
+        "action_dim": normalizer.action_mean.numel(),
+        "n_cameras": len(image_keys),
+        "image_keys": image_keys,
+        "fps": base.fps,
+        "normalizer": normalizer,
+    }
+
+
 def build_dataloaders(cfg: dict, seed: int = 0):
     """Return (train_loader, val_loader, meta) for the configured dataset.
 
