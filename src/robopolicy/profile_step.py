@@ -20,6 +20,21 @@ from .model.transformer import MultiheadAttention
 from .utils import load_config, resolve_device, set_seed
 
 
+def _nvtx_push(tag: str):
+    # A forward_pre_hook must return None: any non-None return is interpreted by
+    # PyTorch as replacement input args. range_push() returns an int, so the hook
+    # body must not return it (that would clobber the module's inputs).
+    def hook(module, inputs):
+        torch.cuda.nvtx.range_push(tag)
+
+    return hook
+
+
+def _nvtx_pop(module, inputs, output):
+    # Likewise a forward_hook must return None or it replaces the module output.
+    torch.cuda.nvtx.range_pop()
+
+
 def _attach_nvtx(model: nn.Module) -> None:
     """Emit NVTX ranges around notable submodules for a readable timeline."""
     if not torch.cuda.is_available():
@@ -38,8 +53,8 @@ def _attach_nvtx(model: nn.Module) -> None:
         tag = label(module, name)
         if tag is None:
             continue
-        module.register_forward_pre_hook(lambda m, inp, t=tag: torch.cuda.nvtx.range_push(t))
-        module.register_forward_hook(lambda m, inp, out: torch.cuda.nvtx.range_pop())
+        module.register_forward_pre_hook(_nvtx_push(tag))
+        module.register_forward_hook(_nvtx_pop)
 
 
 def synthetic_batch(cfg: dict, meta_dims: dict, device, batch_size: int) -> dict:
