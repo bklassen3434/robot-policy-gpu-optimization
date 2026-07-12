@@ -35,7 +35,8 @@ def _time(fn, iters: int, warmup: int) -> float:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--shape", type=int, nargs="+", default=[800, 512], help="input shape, last dim = normalized")
+    ap.add_argument("--op", choices=["layernorm", "residual_layernorm"], default="residual_layernorm")
+    ap.add_argument("--shape", type=int, nargs="+", default=[302, 512], help="input shape, last dim = normalized")
     ap.add_argument("--iters", type=int, default=1000)
     ap.add_argument("--warmup", type=int, default=50)
     args = ap.parse_args()
@@ -47,16 +48,21 @@ def main() -> None:
     w = torch.randn(args.shape[-1], device="cuda")
     b = torch.randn(args.shape[-1], device="cuda")
 
+    if args.op == "residual_layernorm":
+        res = torch.randn(*args.shape, device="cuda")
+        ref_fn = lambda: reference.pytorch_residual_layernorm(x, res, w, b)  # noqa: E731
+        cuda_fn = lambda: reference.cuda_residual_layernorm(x, res, w, b)  # noqa: E731
+    else:
+        ref_fn = lambda: reference.pytorch_layernorm(x, w, b)  # noqa: E731
+        cuda_fn = lambda: reference.cuda_layernorm(x, w, b)  # noqa: E731
+
     # correctness gate before timing
-    torch.testing.assert_close(
-        reference.cuda_layernorm(x, w, b), reference.pytorch_layernorm(x, w, b),
-        rtol=1e-4, atol=1e-5,
-    )
+    torch.testing.assert_close(cuda_fn(), ref_fn(), rtol=1e-4, atol=1e-5)
 
-    ref_ms = _time(lambda: reference.pytorch_layernorm(x, w, b), args.iters, args.warmup)
-    cuda_ms = _time(lambda: reference.cuda_layernorm(x, w, b), args.iters, args.warmup)
+    ref_ms = _time(ref_fn, args.iters, args.warmup)
+    cuda_ms = _time(cuda_fn, args.iters, args.warmup)
 
-    print(f"shape={tuple(args.shape)}  iters={args.iters}")
+    print(f"op={args.op}  shape={tuple(args.shape)}  iters={args.iters}")
     print(f"  PyTorch reference : {ref_ms * 1000:8.2f} us")
     print(f"  custom CUDA kernel: {cuda_ms * 1000:8.2f} us")
     print(f"  speedup           : {ref_ms / cuda_ms:8.2f}x")

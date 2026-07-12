@@ -3,6 +3,8 @@
 
 // defined in layernorm_kernel.cu
 torch::Tensor layernorm_forward_cuda(torch::Tensor x, torch::Tensor weight, torch::Tensor bias, double eps);
+torch::Tensor residual_layernorm_forward_cuda(
+    torch::Tensor x, torch::Tensor residual, torch::Tensor weight, torch::Tensor bias, double eps);
 
 torch::Tensor layernorm_forward(torch::Tensor x, torch::Tensor weight, torch::Tensor bias, double eps) {
   TORCH_CHECK(x.is_cuda(), "x must be a CUDA tensor");
@@ -13,6 +15,19 @@ torch::Tensor layernorm_forward(torch::Tensor x, torch::Tensor weight, torch::Te
   return layernorm_forward_cuda(x, weight, bias, eps);
 }
 
+torch::Tensor residual_layernorm_forward(
+    torch::Tensor x, torch::Tensor residual, torch::Tensor weight, torch::Tensor bias, double eps) {
+  TORCH_CHECK(x.is_cuda() && residual.is_cuda(), "x/residual must be CUDA tensors");
+  TORCH_CHECK(weight.is_cuda() && bias.is_cuda(), "weight/bias must be CUDA tensors");
+  TORCH_CHECK(x.scalar_type() == torch::kFloat32, "only float32 is supported");
+  TORCH_CHECK(x.sizes() == residual.sizes(), "x and residual must have the same shape");
+  TORCH_CHECK(weight.numel() == x.size(-1), "weight size must equal normalized dim");
+  TORCH_CHECK(bias.numel() == x.size(-1), "bias size must equal normalized dim");
+  return residual_layernorm_forward_cuda(x, residual, weight, bias, eps);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("layernorm_forward", &layernorm_forward, "Fused LayerNorm forward (CUDA)");
+  m.def("residual_layernorm_forward", &residual_layernorm_forward,
+        "Fused residual-add + LayerNorm forward (CUDA)");
 }
