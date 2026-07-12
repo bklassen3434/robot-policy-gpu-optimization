@@ -60,7 +60,13 @@ def eval_sim_success(model: ACT, cfg: dict, meta: dict, device) -> float:
     normalizer: Normalizer = meta["normalizer"].to(device)
     image_keys = meta["image_keys"]
 
-    env = gym.make("gym_aloha/AlohaTransferCube-v0", max_episode_steps=ecfg["max_episode_steps"])
+    # obs_type="pixels_agent_pos" -> obs = {"pixels": {"top": HWC uint8}, "agent_pos": (14,)};
+    # the default "pixels" omits the joint state that the policy needs.
+    env = gym.make(
+        "gym_aloha/AlohaTransferCube-v0",
+        obs_type="pixels_agent_pos",
+        max_episode_steps=ecfg["max_episode_steps"],
+    )
     successes = 0
     n_ep = ecfg["n_episodes"]
     for ep in range(n_ep):
