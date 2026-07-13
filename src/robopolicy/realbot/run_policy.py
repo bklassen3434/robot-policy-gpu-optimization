@@ -1,0 +1,197 @@
+"""Load a fine-tuned SmolVLA and run it on the SO-101 from an instruction string.
+
+This is the inference/control half of Path B. It runs on the M3 Mac (MPS). The
+LeRobot touch-points (robot class, policy class, observation/action key names)
+moved across releases — every one is marked `VERIFY:` so you can reconcile with
+the installed version (§7, §12). The control structure around them is stable.
+
+Typed smoke test (Phase 3, before voice):
+    python -m robopolicy.realbot.run_policy --instruction "pick up the red block"
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+
+from .config import DEFAULT_CONFIG, has_placeholder, load_config
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Version-tolerant LeRobot imports. LeRobot renamed lerobot.common.* -> lerobot.*
+# around 0.6; try both so this works on either.
+# ─────────────────────────────────────────────────────────────────────────────
+def _import_first(paths: list[tuple[str, str]], what: str):
+    """Return the first importable attr from a list of (module, attr) candidates."""
+    import importlib
+    errors = []
+    for module, attr in paths:
+        try:
+            return getattr(importlib.import_module(module), attr)
+        except (ImportError, AttributeError) as e:
+            errors.append(f"  {module}.{attr}: {e}")
+    raise ImportError(
+        f"Could not import {what} from any known LeRobot path. Tried:\n"
+        + "\n".join(errors)
+        + "\n\nInstall with:  pip install -e '.[realbot]'  and VERIFY the import "
+          "path against your installed lerobot version (§12)."
+    )
+
+
+def _load_smolvla(policy_path: str, device):
+    """Load a fine-tuned SmolVLA policy from a local dir or HF repo id."""
+    SmolVLAPolicy = _import_first([
+        ("lerobot.policies.smolvla.modeling_smolvla", "SmolVLAPolicy"),
+        ("lerobot.common.policies.smolvla.modeling_smolvla", "SmolVLAPolicy"),
+    ], "SmolVLAPolicy")
+    policy = SmolVLAPolicy.from_pretrained(policy_path)  # VERIFY: from_pretrained signature
+    policy.to(device)
+    policy.eval()
+    if hasattr(policy, "reset"):
+        policy.reset()
+    return policy
+
+
+def _build_robot(robot_cfg: dict):
+    """Instantiate + connect the SO-101 follower from the config's robot block."""
+    SO101Follower = _import_first([
+        ("lerobot.robots.so101_follower", "SO101Follower"),
+        ("lerobot.common.robots.so101_follower", "SO101Follower"),
+    ], "SO101Follower")
+    SO101FollowerConfig = _import_first([
+        ("lerobot.robots.so101_follower", "SO101FollowerConfig"),
+        ("lerobot.common.robots.so101_follower", "SO101FollowerConfig"),
+    ], "SO101FollowerConfig")
+
+    # VERIFY: camera config construction. Recent lerobot wants OpenCVCameraConfig
+    # objects keyed by name; the index_or_path field name may differ by version.
+    cameras = _build_cameras(robot_cfg.get("cameras", {}))
+    cfg = SO101FollowerConfig(
+        port=robot_cfg["port"],
+        id=robot_cfg.get("id", "so101_follower"),
+        cameras=cameras,
+    )
+    robot = SO101Follower(cfg)
+    robot.connect()
+    return robot
+
+
+def _build_cameras(cams: dict) -> dict:
+    """Turn the yaml camera block into lerobot camera configs, keyed by name."""
+    OpenCVCameraConfig = _import_first([
+        ("lerobot.cameras.opencv.configuration_opencv", "OpenCVCameraConfig"),
+        ("lerobot.common.cameras.opencv.configuration_opencv", "OpenCVCameraConfig"),
+    ], "OpenCVCameraConfig")
+    out = {}
+    for name, c in cams.items():
+        if has_placeholder(c.get("index_or_path")):
+            raise SystemExit(
+                f"Camera '{name}' still has a placeholder index_or_path. Run "
+                f"`make detect-cameras` and fill configs/smolvla_so101.yaml first (§10.5)."
+            )
+        out[name] = OpenCVCameraConfig(
+            index_or_path=c["index_or_path"],
+            fps=c.get("fps", 30),
+            width=c.get("width", 640),
+            height=c.get("height", 480),
+        )
+    return out
+
+
+def _resolve_device(name: str):
+    import torch
+    if name and name != "auto":
+        return torch.device(name)
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def _observation_to_batch(obs: dict, instruction: str, device):
+    """Shape a robot observation dict into the batch SmolVLA.select_action expects.
+
+    VERIFY: SmolVLA conditions on language via a "task" key (list[str]); image keys
+    are "observation.images.<name>" and state is "observation.state". robot.get_observation()
+    typically already returns those keys — we just add the task and move to device.
+    """
+    import torch
+    batch = {}
+    for k, v in obs.items():
+        if isinstance(v, torch.Tensor):
+            batch[k] = v.to(device)
+        else:  # numpy image / state -> tensor
+            batch[k] = torch.as_tensor(v).to(device)
+    batch["task"] = [instruction]
+    return batch
+
+
+class SO101Runner:
+    """Holds the connected robot + loaded policy so one process can serve many commands."""
+
+    def __init__(self, config_path=DEFAULT_CONFIG):
+        self.cfg = load_config(config_path)
+        rt = self.cfg["runtime"]
+        self.control_hz = float(rt.get("control_hz", 30))
+        self.max_steps = int(rt.get("max_episode_steps", 900))
+        self.device = _resolve_device(rt.get("device", "auto"))
+        print(f"[run_policy] device={self.device} control_hz={self.control_hz}")
+
+        self.policy = _load_smolvla(rt["policy_path"], self.device)
+        self.robot = _build_robot(self.cfg["robot"])
+        print("[run_policy] robot connected, policy loaded.")
+
+    def run_instruction(self, instruction: str, max_steps: int | None = None) -> None:
+        """Run one conditioned rollout at the target control rate until timeout/stop."""
+        import torch
+
+        steps = max_steps or self.max_steps
+        period = 1.0 / self.control_hz
+        if hasattr(self.policy, "reset"):
+            self.policy.reset()
+        print(f"[run_policy] running: {instruction!r}  ({steps} steps @ {self.control_hz} Hz)")
+
+        try:
+            for i in range(steps):
+                t0 = time.perf_counter()
+                obs = self.robot.get_observation()       # VERIFY: method name
+                batch = _observation_to_batch(obs, instruction, self.device)
+                with torch.no_grad():
+                    action = self.policy.select_action(batch)  # returns next action
+                # VERIFY: send_action expects a dict/tensor matching robot.action_features
+                self.robot.send_action(action)
+                # maintain the control period
+                dt = time.perf_counter() - t0
+                if dt < period:
+                    time.sleep(period - dt)
+                elif i and i % 30 == 0:
+                    print(f"   step {i}: loop {dt*1000:.1f} ms > {period*1000:.1f} ms budget "
+                          f"(inference too slow for {self.control_hz} Hz — see Phase 5)")
+        except KeyboardInterrupt:
+            print("\n[run_policy] interrupted — stopping rollout.")
+        print("[run_policy] rollout done.")
+
+    def close(self) -> None:
+        try:
+            self.robot.disconnect()
+        except Exception:
+            pass
+
+
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description="Run fine-tuned SmolVLA on the SO-101.")
+    ap.add_argument("--instruction", required=True, help='e.g. "pick up the red block"')
+    ap.add_argument("--config", default=str(DEFAULT_CONFIG))
+    ap.add_argument("--max-steps", type=int, default=None)
+    args = ap.parse_args(argv)
+
+    runner = SO101Runner(args.config)
+    try:
+        runner.run_instruction(args.instruction, max_steps=args.max_steps)
+    finally:
+        runner.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

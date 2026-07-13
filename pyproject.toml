@@ -26,6 +26,23 @@ data = [
 dev = [
     "pytest>=8.0",
 ]
+# Path B (physical SO-101). Mac-side inference + voice front-end.
+# Install on the M3 Mac with:  pip install -e ".[realbot]"
+#   - lerobot[smolvla,feetech]: SmolVLA policy + Feetech STS motor bus (SO-101).
+#   - mlx-whisper: Apple-Silicon-native Whisper (Metal) for the voice layer.
+#   - sounddevice: mic capture. opencv-python: camera capture for detect_cameras.
+# NOTE: verify the exact lerobot extra names against the installed version (§12).
+realbot = [
+    "lerobot[smolvla,feetech]>=0.6",
+    "mlx-whisper>=0.4",
+    "sounddevice>=0.4",
+    "opencv-python>=4.9",
+]
+# RunPod / CUDA training box for SmolVLA fine-tuning.
+# Install on the pod with:  pip install -e ".[smolvla]"   (see scripts/runpod_smolvla.sh)
+smolvla = [
+    "lerobot[smolvla]>=0.6",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
