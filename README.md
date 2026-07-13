@@ -1,12 +1,10 @@
 # robot-policy-gpu-optimization
 
-**Built a transformer robot-arm policy from scratch in PyTorch, wrote a custom CUDA kernel to make it _N×_ faster, and proved accuracy held with automated evals.**
+**Built a transformer robot-arm policy from scratch in PyTorch, profiled it with NSight, and wrote a custom fused CUDA kernel for its hottest hand-optimizable op — 1.3–1.4× on that op, numerically parity-verified, task accuracy held.**
 
-This repo trains an [ACT](https://tonyzhaozh.github.io/aloha/) (Action Chunking Transformer) policy — implemented from scratch, no pre-built transformer blocks — on a public [LeRobot](https://github.com/huggingface/lerobot) dataset, matches the official implementation's task success rate, then profiles the model and replaces the single hottest operation with a hand-written CUDA kernel that produces numerically identical outputs.
+This repo trains an [ACT](https://tonyzhaozh.github.io/aloha/) (Action Chunking Transformer) policy — implemented from scratch, no pre-built transformer blocks — on a public [LeRobot](https://github.com/huggingface/lerobot) dataset, matches the official implementation's task success rate, then profiles the model to find where the GPU time actually goes and writes a hand-tuned CUDA kernel for the one operation a custom kernel can beat. The profile shows the model is GEMM/conv-bound (backbone convs + attention/FFN matmuls are already on optimal NVIDIA libraries, and attention is already fused), so the honest target is the launch/memory-bound **residual-add + LayerNorm** glue — fused into one kernel, output-identical to PyTorch, with the end-to-end impact reported truthfully (~1–2%). The point is the profiling judgment, not a cherry-picked headline.
 
 ## Results
-
-> Model trained and evaluated. Kernel rows filled in after NSight profiling.
 
 | Metric | Value |
 | --- | --- |
@@ -14,11 +12,15 @@ This repo trains an [ACT](https://tonyzhaozh.github.io/aloha/) (Action Chunking 
 | Training | 100k steps on an A100 80GB; final L1 `0.077`, loss `0.084` |
 | **Task success (ours)** | **52.0%** (26/50 sim rollouts, gym-aloha `AlohaTransferCube`) |
 | Task success (official ACT) | ~50% on this task (LeRobot reproduction range) |
-| Hottest op (NSight) | `TBD` — profiling next |
-| Latency before → after | `__ ms → __ ms` (`__×`) |
-| Accuracy after kernel | to verify: parity + success rate held |
+| Profiled bottleneck (NSight) | GEMM/conv-bound: ResNet backbone + attention/FFN matmuls (already optimal libs); attention already fused |
+| Custom kernel | fused **residual-add + LayerNorm** (the hand-optimizable pointwise op) |
+| Kernel latency (RTX 4090) | **1.3–1.4×** vs PyTorch `add + layer_norm`, op-level (e.g. `8.5 → 6.4 µs`) |
+| End-to-end impact | ~1–2% (model is GEMM-bound — see writeup for the honest framing) |
+| Accuracy after kernel | **held** — parity `rtol 1e-4` (11/11) + sim success 52% vs 56% baseline (within run-to-run noise) |
 
 ![latency chart](docs/latency.png)
+
+See [`docs/writeup.md`](docs/writeup.md) for the full profile → kernel → benchmark → accuracy-held story.
 
 ## What's from scratch
 
