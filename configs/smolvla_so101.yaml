@@ -1,0 +1,92 @@
+# Path B — fine-tune lerobot/smolvla_base on a real SO-101 for language-conditioned
+# object selection ("pick up the {color} block" with distractors present).
+#
+# This config is read by the realbot track (src/robopolicy/realbot/*) and mirrors the
+# information LeRobot's record/train CLIs need. Where a value feeds a LeRobot CLI flag,
+# the exact flag is noted — VERIFY flag names against the installed LeRobot version (§12).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task definition — what the policy is being taught.
+# ─────────────────────────────────────────────────────────────────────────────
+task:
+  # Objects present in EVERY episode. One is the target, the rest are distractors.
+  # Keep them visually distinct (§5). Targets must be balanced across the dataset.
+  objects: [red block, green block, blue block]
+
+  # Canonical instruction template. The dataset `task` string per episode is
+  # template.format(object=<target>), e.g. "pick up the red block".
+  # This is also what SmolVLA is conditioned on at inference.
+  instruction_template: "pick up the {object}"
+
+  # Spoken/typed synonyms normalized to the canonical verb above (voice.py).
+  # Lets you say "grab the red block" and still condition on "pick up the red block".
+  verb_synonyms: [pick up, grab, get, take, pick]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Dataset — HuggingFace Hub (public, per §10.4).
+# ─────────────────────────────────────────────────────────────────────────────
+dataset:
+  repo_id: bklassen3434/so101_pick_object
+  fps: 30
+  # Camera keys become observation.images.<name> in the recorded dataset.
+  # Overhead carries object grounding; wrist carries the grasp (§5).
+  image_keys: [observation.images.overhead, observation.images.wrist]
+  state_key: observation.state
+  action_key: action
+  push_to_hub: true
+  private: false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Robot — SO-101 follower (Feetech STS bus) + two USB cameras.
+#
+# PLACEHOLDERS: fill `port` and each camera's `index_or_path` from the output of
+#   make detect-cameras        (python -m robopolicy.realbot.detect_cameras)
+# run once with the arm + cameras plugged in. Pin cameras by stable id/path, NOT a
+# bare index — USB enumeration order shuffles between sessions (§10.5, §12).
+# ─────────────────────────────────────────────────────────────────────────────
+robot:
+  type: so101_follower
+  port: "<FILL_ME: e.g. /dev/tty.usbmodemXXXX>"    # follower arm serial port
+  id: so101_follower                                # calibration id (must match calibration)
+  cameras:
+    overhead:
+      index_or_path: "<FILL_ME: AVFoundation index or unique id>"
+      fps: 30
+      width: 640
+      height: 480
+    wrist:
+      index_or_path: "<FILL_ME: AVFoundation index or unique id>"
+      fps: 30
+      width: 640
+      height: 480
+
+teleop:
+  # Leader arm used to teleoperate the follower during recording.
+  type: so101_leader
+  port: "<FILL_ME: e.g. /dev/tty.usbmodemYYYY>"     # leader arm serial port
+  id: so101_leader
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Runtime — Mac-side inference / control loop (run_policy.py, agent.py).
+# ─────────────────────────────────────────────────────────────────────────────
+runtime:
+  # Fine-tuned checkpoint pulled from the Hub for inference (produced by Phase 2).
+  policy_path: bklassen3434/smolvla_so101
+  device: auto                 # auto -> mps on the M3, else cpu
+  control_hz: 30               # per-step execution rate of the SmolVLA action chunk (§10.3)
+  max_episode_steps: 900       # ~30 s at 30 Hz before the rollout times out
+  chunk_execution: full        # execute the full predicted chunk, or "replan" every step
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Training — SmolVLA fine-tune from the pretrained base (RunPod GPU, Phase 2).
+# Consumed by scripts/runpod_smolvla.sh -> lerobot-train (VERIFY flags, §7).
+# ─────────────────────────────────────────────────────────────────────────────
+train:
+  policy_type: smolvla
+  base_checkpoint: lerobot/smolvla_base   # ~450M language-conditioned VLA
+  steps: 20000                            # common starting point; a few hrs on one A100/4090
+  batch_size: 64
+  save_freq: 5000
+  seed: 1000
+  output_dir: outputs/smolvla_so101
+  push_to_hub: true                       # push fine-tuned checkpoint to runtime.policy_path
