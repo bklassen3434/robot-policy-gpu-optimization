@@ -27,6 +27,18 @@ def pytorch_layernorm(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor,
     return F.layer_norm(x, (x.shape[-1],), weight, bias, eps)
 
 
+def pytorch_residual_layernorm(
+    x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, eps: float = 1e-5
+) -> torch.Tensor:
+    """Reference residual-add + LayerNorm: ``LayerNorm(x + residual)``.
+
+    This is the exact post-norm sublayer pattern (``norm(x + sublayer(x))``) the profile
+    flagged, expressed as the two PyTorch kernels the fused kernel replaces: an
+    elementwise add followed by ``F.layer_norm``.
+    """
+    return F.layer_norm(x + residual, (x.shape[-1],), weight, bias, eps)
+
+
 @functools.lru_cache(maxsize=1)
 def load_cuda_layernorm():
     """Compile & load the custom CUDA LayerNorm extension (cached)."""
@@ -46,3 +58,13 @@ def cuda_layernorm(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, ep
     """Custom fused LayerNorm. Output must match ``pytorch_layernorm`` within tolerance."""
     ext = load_cuda_layernorm()
     return ext.layernorm_forward(x.contiguous(), weight.contiguous(), bias.contiguous(), eps)
+
+
+def cuda_residual_layernorm(
+    x: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, eps: float = 1e-5
+) -> torch.Tensor:
+    """Custom fused residual-add + LayerNorm. Must match ``pytorch_residual_layernorm``."""
+    ext = load_cuda_layernorm()
+    return ext.residual_layernorm_forward(
+        x.contiguous(), residual.contiguous(), weight.contiguous(), bias.contiguous(), eps
+    )

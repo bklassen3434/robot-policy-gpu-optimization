@@ -27,6 +27,40 @@ def _clone(module: nn.Module, n: int) -> nn.ModuleList:
     return nn.ModuleList([copy.deepcopy(module) for _ in range(n)])
 
 
+_USE_FUSED_LN = False
+
+
+def set_fused_layernorm(enabled: bool) -> None:
+    """Toggle the custom fused residual+LayerNorm CUDA kernel for the inference path.
+
+    Off by default: training keeps PyTorch's LayerNorm (autograd + already well tuned).
+    When on and inputs are eligible (CUDA float32, no grad), post-norm sublayers
+    dispatch to the fused kernel. It is output-parity with the PyTorch path
+    (kernels/test_parity.py), so it does not change model behavior — see eval step 8.
+    """
+    global _USE_FUSED_LN
+    _USE_FUSED_LN = enabled
+
+
+def _norm_residual(norm: nn.LayerNorm, residual: Tensor, sublayer_out: Tensor) -> Tensor:
+    """Post-norm combiner: ``norm(residual + sublayer_out)``.
+
+    Dispatches to the fused CUDA kernel when enabled and eligible; otherwise the plain
+    PyTorch path (identical math). The fused path folds the residual add into the
+    LayerNorm reduction, removing a kernel launch and a full global-memory round-trip.
+    """
+    if (
+        _USE_FUSED_LN
+        and residual.is_cuda
+        and residual.dtype == torch.float32
+        and not torch.is_grad_enabled()
+    ):
+        from ..fused_ops import residual_layernorm
+
+        return residual_layernorm(residual, sublayer_out, norm.weight, norm.bias, norm.eps)
+    return norm(residual + sublayer_out)
+
+
 def sinusoidal_pos_embedding_1d(num_positions: int, dim: int) -> Tensor:
     """Standard 1D sinusoidal position embedding, shape ``(num_positions, dim)``."""
     if dim % 2 != 0:
@@ -158,8 +192,10 @@ class TransformerEncoderLayer(nn.Module):
             return src
         # post-norm (DETR / ACT default)
         q = k = _add_pos(src, pos)
-        src = self.norm1(src + self.dropout1(self.self_attn(q, k, src)))
-        src = self.norm2(src + self.dropout2(self.linear2(self.dropout(self.activation(self.linear1(src))))))
+        src = _norm_residual(self.norm1, src, self.dropout1(self.self_attn(q, k, src)))
+        src = _norm_residual(
+            self.norm2, src, self.dropout2(self.linear2(self.dropout(self.activation(self.linear1(src)))))
+        )
         return src
 
 
@@ -224,14 +260,15 @@ class TransformerDecoderLayer(nn.Module):
             return tgt
         # post-norm (DETR / ACT default)
         q = k = _add_pos(tgt, query_pos)
-        tgt = self.norm1(tgt + self.dropout1(self.self_attn(q, k, tgt)))
-        tgt = self.norm2(
-            tgt
-            + self.dropout2(
-                self.cross_attn(_add_pos(tgt, query_pos), _add_pos(memory, pos), memory)
-            )
+        tgt = _norm_residual(self.norm1, tgt, self.dropout1(self.self_attn(q, k, tgt)))
+        tgt = _norm_residual(
+            self.norm2,
+            tgt,
+            self.dropout2(self.cross_attn(_add_pos(tgt, query_pos), _add_pos(memory, pos), memory)),
         )
-        tgt = self.norm3(tgt + self.dropout3(self.linear2(self.dropout(self.activation(self.linear1(tgt))))))
+        tgt = _norm_residual(
+            self.norm3, tgt, self.dropout3(self.linear2(self.dropout(self.activation(self.linear1(tgt)))))
+        )
         return tgt
 
 

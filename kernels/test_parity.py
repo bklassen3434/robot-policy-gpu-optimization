@@ -19,7 +19,12 @@ import reference  # noqa: E402
 pytestmark = pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required for kernel parity")
 
 
-@pytest.mark.parametrize("shape", [(8, 512), (100 * 8, 512), (300, 512), (1, 3200)])
+# Shapes that occur in the model: (seq*batch, dim_model=512). 302 = 2 + 15*20 image
+# tokens (encoder memory), 100 = decoder chunk; batch 1 (infer) and 8 (train).
+_LN_SHAPES = [(8, 512), (100 * 8, 512), (302, 512), (100, 512), (1, 3200)]
+
+
+@pytest.mark.parametrize("shape", _LN_SHAPES)
 def test_layernorm_matches_reference(shape):
     torch.manual_seed(0)
     x = torch.randn(*shape, device="cuda")
@@ -28,6 +33,20 @@ def test_layernorm_matches_reference(shape):
 
     ref = reference.pytorch_layernorm(x, w, b)
     out = reference.cuda_layernorm(x, w, b)
+
+    torch.testing.assert_close(out, ref, rtol=1e-4, atol=1e-5)
+
+
+@pytest.mark.parametrize("shape", _LN_SHAPES)
+def test_residual_layernorm_matches_reference(shape):
+    torch.manual_seed(0)
+    x = torch.randn(*shape, device="cuda")
+    residual = torch.randn(*shape, device="cuda")
+    w = torch.randn(shape[-1], device="cuda")
+    b = torch.randn(shape[-1], device="cuda")
+
+    ref = reference.pytorch_residual_layernorm(x, residual, w, b)
+    out = reference.cuda_residual_layernorm(x, residual, w, b)
 
     torch.testing.assert_close(out, ref, rtol=1e-4, atol=1e-5)
 

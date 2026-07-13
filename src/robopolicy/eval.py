@@ -113,11 +113,19 @@ def main() -> None:
     ap.add_argument("--no-sim", action="store_true", help="skip the sim rollout")
     ap.add_argument("--with-val-l1", action="store_true",
                     help="also compute val L1 (builds the image cache; slow)")
+    ap.add_argument("--fused-kernel", action="store_true",
+                    help="use the custom fused residual+LayerNorm CUDA kernel in the inference path (step 8)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     device = resolve_device(cfg["train"].get("device", "auto"))
     model, _ = load_checkpoint(args.checkpoint, device)
+
+    if args.fused_kernel:
+        from .model.transformer import set_fused_layernorm
+
+        set_fused_layernorm(True)
+        print("fused residual+LayerNorm kernel: ENABLED (inference path)")
 
     # Cheap metadata path (normalizer + dims), no image cache — enough for sim rollout.
     from .data import build_meta
