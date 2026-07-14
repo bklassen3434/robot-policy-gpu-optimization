@@ -47,9 +47,18 @@ def _mac_cameras() -> list[dict]:
 
 
 def _serial_ports() -> list[str]:
-    """USB serial ports — the SO-101 leader/follower arms show up here."""
-    ports = sorted(set(glob.glob("/dev/tty.usb*") + glob.glob("/dev/cu.usb*")))
-    return ports
+    """USB serial ports — the SO-101 leader/follower arms show up here.
+
+    Match the common macOS USB-serial bridge names. The SO-101 uses a WCH
+    (CH340-family) bridge -> tty.wchusbserial*; others show as usbserial /
+    usbmodem / SLAB_USBtoUART (CP210x). We report tty.* (what LeRobot expects on
+    mac); the matching cu.* alias exists too.
+    """
+    patterns = ["usb*", "wchusbserial*", "usbmodem*", "usbserial*", "SLAB_USBtoUART*"]
+    ports = set()
+    for pat in patterns:
+        ports.update(glob.glob(f"/dev/tty.{pat}"))
+    return sorted(ports)
 
 
 def _opencv_probe(max_index: int = 8) -> list[dict]:
