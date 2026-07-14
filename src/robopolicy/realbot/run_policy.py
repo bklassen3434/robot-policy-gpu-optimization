@@ -55,11 +55,15 @@ def _load_smolvla(policy_path: str, device):
 
 def _build_robot(robot_cfg: dict):
     """Instantiate + connect the SO-101 follower from the config's robot block."""
+    # Module is `so_follower` in recent lerobot (exports SO101Follower alias);
+    # older layouts used so101_follower / lerobot.common.*.
     SO101Follower = _import_first([
+        ("lerobot.robots.so_follower", "SO101Follower"),
         ("lerobot.robots.so101_follower", "SO101Follower"),
         ("lerobot.common.robots.so101_follower", "SO101Follower"),
     ], "SO101Follower")
     SO101FollowerConfig = _import_first([
+        ("lerobot.robots.so_follower", "SO101FollowerConfig"),
         ("lerobot.robots.so101_follower", "SO101FollowerConfig"),
         ("lerobot.common.robots.so101_follower", "SO101FollowerConfig"),
     ], "SO101FollowerConfig")

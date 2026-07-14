@@ -46,16 +46,20 @@ dataset:
 # ─────────────────────────────────────────────────────────────────────────────
 robot:
   type: so101_follower
-  port: "<FILL_ME: e.g. /dev/tty.usbmodemXXXX>"    # follower arm serial port
-  id: so101_follower                                # calibration id (must match calibration)
+  # Serials are burned into each arm's USB bridge -> stable across replugs. CONFIRM
+  # which of the two is the follower with the unplug test (see record_runbook.md §0).
+  port: "/dev/tty.wchusbserial5B3E1187321"          # <-- CONFIRM follower vs leader
+  id: my_awesome_follower_arm                        # reuses existing calibration (no recalibrate)
   cameras:
-    overhead:
-      index_or_path: "<FILL_ME: AVFoundation index or unique id>"
+    # macOS OpenCV backend takes an INTEGER index (not a stable path); re-verify each
+    # session with `make detect-cameras`. Physical cams present: C270 + icspring.
+    overhead:                                        # front-ish view -> object grounding (§5)
+      index_or_path: 0                               # <-- SET to the C270/front index
       fps: 30
       width: 640
       height: 480
-    wrist:
-      index_or_path: "<FILL_ME: AVFoundation index or unique id>"
+    wrist:                                           # hand-eye view -> the grasp
+      index_or_path: 1                               # <-- SET to the icspring/wrist index
       fps: 30
       width: 640
       height: 480
@@ -63,8 +67,8 @@ robot:
 teleop:
   # Leader arm used to teleoperate the follower during recording.
   type: so101_leader
-  port: "<FILL_ME: e.g. /dev/tty.usbmodemYYYY>"     # leader arm serial port
-  id: so101_leader
+  port: "/dev/tty.wchusbserial5B3E1213311"          # <-- CONFIRM follower vs leader
+  id: my_awesome_leader_arm                          # reuses existing calibration
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Runtime — Mac-side inference / control loop (run_policy.py, agent.py).
