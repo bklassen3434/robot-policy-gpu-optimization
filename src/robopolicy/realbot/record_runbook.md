@@ -54,9 +54,19 @@ shortcut — follow them exactly.
 4. Teleoperate the follower with the leader: approach, grasp the **target**, lift clear.
 5. Stop the episode. Reset the scene. Repeat.
 
+**You never speak during recording** — voice/Whisper is deployment only (Phase 4).
+The instruction is a text **label**: `--dataset.single_task` is stamped on *every*
+episode in that run. So **record one object per run (batch by target)** — set the
+label once, then just teleoperate + rearrange between episodes. Do a `pen` run, then
+a `keys` run, etc. All three objects stay on the table every episode as distractors;
+only the target (and label) changes per batch. Move the target to many spots within
+a batch so identity isn't tied to location.
+
 ## 4. Record command (verify flags)
 
-Conceptually (reconcile flag names with `lerobot-record --help`):
+First confirm the follower mirrors the leader with a dry `lerobot-teleoperate` (same
+robot/teleop flags, no `--dataset.*`). Then record (reconcile flags with
+`lerobot-record --help`):
 
 ```bash
 lerobot-record \
@@ -79,8 +89,25 @@ Set the camera `index_or_path` values from `make detect-cameras` (macOS OpenCV u
 integer indices — cover a lens to tell the C270 from the icspring).
 
 Record in **per-target batches** (all "pen" episodes with `single_task="pick up the
-pen"`, then keys, then sanitizer), or set the task per episode if your version
-supports it. Keep the counts balanced across objects.
+pen"`, then keys, then sanitizer). Keep the counts balanced across objects.
+
+### What the record loop does (and the keys)
+1. Connects both arms + both cameras and opens a live view.
+2. Prints "Recording episode…" — teleoperate the follower with the leader; grasp the
+   target and lift it clear.
+3. **`→` (right arrow)** = end the episode (or it auto-ends at `episode_time_s`).
+4. A **reset window** opens (`reset_time_s`) — rearrange the objects to new random
+   positions — **`→`** when ready for the next episode.
+5. Repeats until `num_episodes`. **`←` (left arrow)** = discard & re-record the last
+   episode (use on any fumble). **`Esc`** = stop recording.
+6. At the end it encodes the videos and pushes the dataset to the Hub.
+
+Set `--dataset.episode_time_s` (~30) and `--dataset.reset_time_s` (~15) so it doesn't
+idle at the 60 s defaults; you'll usually end each phase early with `→`.
+
+**macOS:** the arrow keys need keyboard-monitoring permission — grant your terminal
+**Accessibility** *and* **Input Monitoring** (System Settings → Privacy & Security),
+or `→`/`←`/`Esc` won't register.
 
 ## 5. Data budget (§6) — collect the *validate* set FIRST
 
