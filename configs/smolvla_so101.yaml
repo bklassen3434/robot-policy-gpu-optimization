@@ -53,14 +53,15 @@ robot:
   id: my_awesome_follower_arm                        # reuses existing calibration (no recalibrate)
   cameras:
     # macOS OpenCV backend takes an INTEGER index (not a stable path); re-verify each
-    # session with `make detect-cameras`. Physical cams present: C270 + icspring.
-    overhead:                                        # front-ish view -> object grounding (§5)
-      index_or_path: 0                               # <-- SET to the C270/front index
+    # session with `uv run lerobot-find-cameras opencv` (indices can shuffle on replug).
+    # Confirmed via find-cameras: 0=C270 (overhead), 1=icspring (wrist), 2=FaceTime.
+    overhead:                                        # C270, front view -> object grounding (§5)
+      index_or_path: 0
       fps: 30
       width: 640
       height: 480
-    wrist:                                           # hand-eye view -> the grasp
-      index_or_path: 1                               # <-- SET to the icspring/wrist index
+    wrist:                                           # icspring, hand-eye view -> the grasp
+      index_or_path: 1
       fps: 30
       width: 640
       height: 480
