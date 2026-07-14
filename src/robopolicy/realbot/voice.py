@@ -60,8 +60,10 @@ def normalize_instruction(
         return None
 
     # Longest object name first so "red block" wins over a bare "block".
+    # Word-boundary match (not substring): "open the door" must NOT hit "pen", and
+    # "hand sanitizer" should still match the object "sanitizer".
     for obj in sorted(objects, key=len, reverse=True):
-        if obj.lower() in t:
+        if re.search(rf"\b{re.escape(obj.lower())}\b", t):
             return Instruction(
                 canonical=template.format(object=obj),
                 target=obj,

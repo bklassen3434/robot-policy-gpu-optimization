@@ -60,6 +60,28 @@ def test_longest_object_name_wins():
     assert r.target == "green block"
 
 
+HOUSEHOLD = ["pen", "keys", "sanitizer"]
+
+
+def test_pen_not_matched_inside_other_words():
+    # word-boundary matching: "open"/"pending" must not false-hit "pen".
+    assert normalize_instruction("open the drawer", HOUSEHOLD, SYNONYMS, TEMPLATE) is None
+    r = normalize_instruction("grab the pen", HOUSEHOLD, SYNONYMS, TEMPLATE)
+    assert r is not None and r.target == "pen"
+
+
+def test_sanitizer_matches_both_phrasings():
+    for phrase in ["grab the sanitizer", "pick up the hand sanitizer"]:
+        r = normalize_instruction(phrase, HOUSEHOLD, SYNONYMS, TEMPLATE)
+        assert r is not None, phrase
+        assert r.canonical == "pick up the sanitizer"
+
+
+def test_keys_target():
+    r = normalize_instruction("take the keys", HOUSEHOLD, SYNONYMS, TEMPLATE)
+    assert r is not None and r.target == "keys"
+
+
 def test_config_objects_match_parser_contract():
     # the shipped config's objects/synonyms/template all parse round-trip.
     cfg = load_config()
