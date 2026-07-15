@@ -11,7 +11,8 @@
 task:
   # Objects present in EVERY episode. One is the target, the rest are distractors.
   # Keep them visually distinct (§5). Targets must be balanced across the dataset.
-  objects: [red block, green block, blue block]
+  # "sanitizer" (not "hand sanitizer") so both phrasings match via word boundary.
+  objects: [pen, keys, sanitizer]
 
   # Canonical instruction template. The dataset `task` string per episode is
   # template.format(object=<target>), e.g. "pick up the red block".
@@ -46,16 +47,21 @@ dataset:
 # ─────────────────────────────────────────────────────────────────────────────
 robot:
   type: so101_follower
-  port: "<FILL_ME: e.g. /dev/tty.usbmodemXXXX>"    # follower arm serial port
-  id: so101_follower                                # calibration id (must match calibration)
+  # Serials are burned into each arm's USB bridge -> stable across replugs. CONFIRM
+  # which of the two is the follower with the unplug test (see record_runbook.md §0).
+  port: "/dev/tty.wchusbserial5B3E1213311"          # follower (confirmed via unplug test)
+  id: my_awesome_follower_arm                        # reuses existing calibration (no recalibrate)
   cameras:
-    overhead:
-      index_or_path: "<FILL_ME: AVFoundation index or unique id>"
+    # macOS OpenCV backend takes an INTEGER index (not a stable path); re-verify each
+    # session with `uv run lerobot-find-cameras opencv` (indices can shuffle on replug).
+    # Confirmed via find-cameras: 0=C270 (overhead), 1=icspring (wrist), 2=FaceTime.
+    overhead:                                        # C270, front view -> object grounding (§5)
+      index_or_path: 0
       fps: 30
       width: 640
       height: 480
-    wrist:
-      index_or_path: "<FILL_ME: AVFoundation index or unique id>"
+    wrist:                                           # icspring, hand-eye view -> the grasp
+      index_or_path: 1
       fps: 30
       width: 640
       height: 480
@@ -63,8 +69,8 @@ robot:
 teleop:
   # Leader arm used to teleoperate the follower during recording.
   type: so101_leader
-  port: "<FILL_ME: e.g. /dev/tty.usbmodemYYYY>"     # leader arm serial port
-  id: so101_leader
+  port: "/dev/tty.wchusbserial5B3E1187321"          # leader (confirmed via unplug test)
+  id: my_awesome_leader_arm                          # reuses existing calibration
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Runtime — Mac-side inference / control loop (run_policy.py, agent.py).
