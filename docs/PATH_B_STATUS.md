@@ -1,18 +1,19 @@
 # Path B — Current Status & Next Steps (handoff)
 
 Living status doc for the physical SO-101 + SmolVLA work. Read this first, then
-`docs/PATH_B_PLAN.md` for the full plan. **Last updated: 2026-07-14.**
+`docs/PATH_B_PLAN.md` for the full plan. **Last updated: 2026-07-19.**
 
 ## TL;DR — where we are
 - Goal: fine-tune **SmolVLA** so a physical **SO-101** picks the object you *name*
   ("pick up the pen") out of distractors, driven by voice. First = language-conditioned
   object selection. See `docs/PATH_B_PLAN.md`.
-- **Phase 1 (data collection) is in progress and going well.** Dataset:
-  **`bklassen3434/so101_pick_object_20260713_221513`** (public HF Hub).
-  - **60 episodes recorded, local + Hub in sync**: **30 "pick up the pen" + 30 "pick up the keys"** (balanced).
-  - **Next: record 30 "pick up the sanitizer" episodes** to complete a 3-object set (~90 total).
-- After the sanitizer batch → **Phase 2: SmolVLA fine-tune on a rented RunPod GPU**, then
-  Phase 3 typed eval, Phase 4 voice.
+- **Phase 1 (data collection) is DONE.** Dataset **`bklassen3434/so101_pick_object_20260713_221513`**
+  (public HF Hub): **90 episodes, balanced 30/30/30** (pen / keys / sanitizer), 41,070 frames.
+- **Phase 2 (SmolVLA fine-tune on RunPod) is essentially done.** Fine-tuned model on the Hub at
+  **`bklassen3434/smolvla_so101`** (public). Trained to 10k/20k steps, resumed to 20k (loss ≈0.04).
+  See "Phase 2 — the RunPod recipe that actually worked" below; `scripts/runpod_smolvla.sh` now
+  encodes it (fresh-run + resume).
+- **Next: Phase 3 typed eval on the arm** (`make run-typed`), then Phase 4 voice.
 
 ## Two repos / two machines (important)
 1. **This repo** (`robot-policy-gpu-optimization`, workspace `basseterre`, branch
@@ -100,16 +101,53 @@ lerobot-record \
   with a few phantom video-tail frames from comms glitches. Used to delete a garbage episode (the
   old ep39, an accidental skip) cleanly. **If `~/lerobot` is reinstalled/reset, these revert.**
 
+## Phase 2 — the RunPod recipe that actually worked (2026-07-19)
+Ran on image `runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404` (torch 2.8.0+cu128, Ubuntu 24.04),
+A100 80GB, CA-MTL-3. `scripts/runpod_smolvla.sh` now encodes all of this (fresh-run **and** resume).
+Every one of these was a wall we hit — do not regress them:
+- **PEP 668:** Ubuntu 24.04 python is externally-managed → `pip install --break-system-packages`.
+- **Two extras:** `pip install -e ".[smolvla,dataset]"` — `lerobot-train` needs HF `datasets` (the
+  `dataset` extra), which `smolvla` does NOT pull in.
+- **Pin torch:** constrain torch/torchvision/torchaudio to the image's `+cu128` builds so the install
+  can't swap in a CPU/other-CUDA wheel.
+- **Video backend = pyav, NOT torchcodec.** PyPI torchcodec is built for a newer torch
+  (`undefined symbol: torch_dtype_float4_e2m1fn_x2` vs torch 2.8) → pass `--dataset.video_backend=pyav`.
+  PyAV links the system FFmpeg 6 fine.
+- **Load base via `--policy.path=lerobot/smolvla_base`** (this build intercepts it and infers the type).
+  The old `--policy.type=smolvla --policy.pretrained_path=...` combo is WRONG here.
+- **Camera rename:** SmolVLA base declares `camera1/2/3`; our data has `overhead/wrist`. Pass
+  `--rename_map` overhead→camera1, wrist→camera2 (dataset ⊆ policy passes the validator).
+  **Inference must apply the same map** — done in `src/robopolicy/realbot/run_policy.py`.
+- **Dataset videos are AV1** → pyav decode is CPU+RAM heavy and the container was mem-capped (~109GB).
+  `--num_workers=48` OOM'd (`av.error.MemoryError`); **20 is the stable sweet spot** (~2.3 s/step on A100).
+- **Push:** `export HF_HUB_DISABLE_XET=1` (Xet lfs-verify fails). `push_to_hub` fires only at the END.
+
+### Recovery / resume (learned the hard way)
+- The pod was **terminated twice** — once by RunPod when the account **balance hit $0** (auto-terminate),
+  which wipes the container disk. **Fix: mount a network volume at `/workspace`** (ours: `lqsnzyd0x6`,
+  50GB, CA-MTL-3) so `outputs/`, the HF cache, and the LeRobot checkout survive. Checkpoints save every
+  5k steps to the volume.
+- **Resume:** re-run `scripts/runpod_smolvla.sh` on a fresh pod with the same volume mounted at
+  `/workspace`; it auto-detects `outputs/.../checkpoints/last` and runs
+  `lerobot-train --config_path=<last>/pretrained_model/train_config.json --resume=true`
+  (train_config.json carries dataset, rename_map, video_backend, steps, workers, push_to_hub).
+- **Deploy via API** (Cloudflare blocks non-curl UAs → use `curl`): `podFindAndDeployOnDemand` with
+  `networkVolumeId` + `volumeMountPath:/workspace` + `dataCenterId` matching the volume, and inject the
+  SSH pubkey via `env:[{key:PUBLIC_KEY,value:<pubkey>}]`. Community A100 was out of stock in CA-MTL-3;
+  SECURE ($1.39/hr) had capacity.
+- **On-pod watchers** (own tmux, survive the driving session dying): a checkpoint-sync that pushes each
+  new checkpoint to the Hub as a safety net, and an autostop that `runpodctl stop`s the pod when the
+  `train` session ends (needs `runpodctl config --apiKey`).
+
 ## Next steps
-1. **Record 30 "pick up the sanitizer" episodes** (command above). Target ~30 for balance → ~90 total.
-   - Recommend `num_episodes=5` batches given the flaky comms (less to lose per dropout, more frequent
-     auto-push). Re-run the same command until sanitizer ≈ 30.
-2. **Phase 2 — SmolVLA fine-tune on RunPod** (`scripts/runpod_smolvla.sh`; user chose RunPod, not the
-   Modal `~/lerobot/train.py` used for their earlier ACT/pen-lift work). Fine-tune `lerobot/smolvla_base`
-   on `bklassen3434/so101_pick_object_20260713_221513`; push checkpoint to `bklassen3434/smolvla_so101`.
-   Verify `lerobot-train` flags against the installed version.
-3. **Phase 3 — typed eval** on the arm (`python -m robopolicy.realbot.agent --typed`), then
-   **Phase 4 — voice** (`--display_data` off; `agent.py` uses MLX-Whisper). See the realbot package.
+1. **Phase 3 — typed eval on the arm.** `make run-typed` (= `python -m robopolicy.realbot.agent --typed
+   --config configs/smolvla_so101.yaml`). Pulls `bklassen3434/smolvla_so101` (public) for inference;
+   config already has real ports + cameras (overhead=0, wrist=1). All 3 objects on the table; type e.g.
+   `pick up the sanitizer`. `run_policy.py` now renames cameras to camera1/camera2 to match training.
+   Run from an env with BOTH this repo (`pip install -e .`) and LeRobot+smolvla. If MPS errors, set
+   `runtime.device: cpu` in the config.
+2. **Phase 4 — voice** (`make run-voice`; `agent.py` uses MLX-Whisper). See the realbot package.
+- If eval is weak: resume for more steps (volume + `training_state` preserved) or collect more/better data.
 
 ## Key files (this repo)
 - `docs/PATH_B_PLAN.md` — full plan (phases, data budget, rules).
