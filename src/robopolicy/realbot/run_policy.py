@@ -112,20 +112,33 @@ def _resolve_device(name: str):
     return torch.device("cpu")
 
 
+# The policy was fine-tuned with LeRobot's `--rename_map` mapping the SO-101 cameras
+# onto SmolVLA base's expected slots (overhead->camera1, wrist->camera2), so its
+# preprocessor/input_features are keyed on camera1/camera2. Inference MUST apply the
+# same rename or the policy receives no image for its declared slots. Keep this in
+# sync with the rename_map in scripts/runpod_smolvla.sh.
+_CAMERA_RENAME = {
+    "observation.images.overhead": "observation.images.camera1",
+    "observation.images.wrist": "observation.images.camera2",
+}
+
+
 def _observation_to_batch(obs: dict, instruction: str, device):
     """Shape a robot observation dict into the batch SmolVLA.select_action expects.
 
     VERIFY: SmolVLA conditions on language via a "task" key (list[str]); image keys
     are "observation.images.<name>" and state is "observation.state". robot.get_observation()
-    typically already returns those keys — we just add the task and move to device.
+    returns overhead/wrist keys, which we rename to the camera1/camera2 the policy was
+    trained on before moving to device.
     """
     import torch
     batch = {}
     for k, v in obs.items():
+        key = _CAMERA_RENAME.get(k, k)
         if isinstance(v, torch.Tensor):
-            batch[k] = v.to(device)
+            batch[key] = v.to(device)
         else:  # numpy image / state -> tensor
-            batch[k] = torch.as_tensor(v).to(device)
+            batch[key] = torch.as_tensor(v).to(device)
     batch["task"] = [instruction]
     return batch
 

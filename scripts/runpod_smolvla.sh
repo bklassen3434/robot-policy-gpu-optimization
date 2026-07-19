@@ -11,7 +11,10 @@
 set -euo pipefail
 
 # ── Config values mirrored from configs/smolvla_so101.yaml ────────────────────
-DATASET_REPO="bklassen3434/so101_pick_object"
+# NOTE: LeRobot stamps a _YYYYMMDD_HHMMSS suffix on the repo_id at dataset creation,
+# so the ACTUAL recorded dataset is the timestamped id below, NOT the base name in
+# the yaml. Override with DATASET_REPO=... if you record a fresh dataset.
+DATASET_REPO="${DATASET_REPO:-bklassen3434/so101_pick_object_20260713_221513}"
 BASE_CKPT="lerobot/smolvla_base"
 OUTPUT_REPO="bklassen3434/smolvla_so101"      # fine-tuned checkpoint -> Hub
 OUTPUT_DIR="outputs/smolvla_so101"
