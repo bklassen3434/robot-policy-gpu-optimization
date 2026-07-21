@@ -53,6 +53,35 @@ def _load_smolvla(policy_path: str, device):
     return policy
 
 
+def _apply_action_horizon(policy, runtime: dict) -> None:
+    """Set how many actions per predicted chunk are executed before re-planning.
+
+    SmolVLA predicts an action *chunk* (~chunk_size, default ~50). `select_action`
+    runs the model only when its internal queue is empty and replays the queued
+    actions on every other call, IGNORING new observations. At the default horizon
+    the arm executes a full ~1.6 s chunk open-loop / blind to the cameras, which on a
+    real robot shows up as "moves roughly right, then acts on a stale plan and wanders"
+    (compounding covariate shift). Lowering `n_action_steps` forces frequent closed-loop
+    re-planning at the cost of more inference calls. This is the single biggest lever
+    for erratic real-arm rollouts. See runtime.n_action_steps / chunk_execution.
+    """
+    n = runtime.get("n_action_steps")
+    if n is None and str(runtime.get("chunk_execution", "full")).lower() == "replan":
+        n = 1  # legacy knob: "replan" == re-plan every control step
+    cfg = getattr(policy, "config", None)
+    if cfg is None or not hasattr(cfg, "n_action_steps"):
+        return
+    if n is None:
+        print(f"[run_policy] n_action_steps unchanged (={cfg.n_action_steps}, "
+              f"chunk_size={getattr(cfg, 'chunk_size', '?')})")
+        return
+    chunk = getattr(cfg, "chunk_size", None)
+    n = max(1, min(int(n), int(chunk))) if chunk else max(1, int(n))
+    old, cfg.n_action_steps = cfg.n_action_steps, n
+    print(f"[run_policy] n_action_steps {old} -> {n}  (re-plan every {n} step(s), "
+          f"chunk_size={chunk})")
+
+
 def _build_robot(robot_cfg: dict):
     """Instantiate + connect the SO-101 follower from the config's robot block."""
     # Module is `so_follower` in recent lerobot (exports SO101Follower alias);
@@ -123,6 +152,34 @@ _CAMERA_RENAME = {
 }
 
 
+def _prep_value(key: str, v, device):
+    """Convert one observation entry to the tensor SmolVLA.select_action expects.
+
+    Mirrors LeRobot's `predict_action`: images become CHW float32 in [0,1], every
+    entry gets a leading batch dim, then moves to device. The image branch is guarded
+    so it's idempotent — if the observation already arrives float/CHW (version-
+    dependent) it isn't double-normalized or wrongly permuted. Getting this wrong
+    (feeding HWC uint8 straight in) yields subtly-wrong actions, not a crash.
+    """
+    import torch
+    t = v if isinstance(v, torch.Tensor) else torch.as_tensor(v)
+    if "image" in key:
+        if t.dtype == torch.uint8:
+            t = t.float() / 255.0
+        else:
+            t = t.float()
+            if float(t.max()) > 1.5:  # float image still in 0..255
+                t = t / 255.0
+        # HWC -> CHW when the channel axis is trailing (3/1) and not already leading
+        if t.ndim == 3 and t.shape[-1] in (1, 3) and t.shape[0] not in (1, 3):
+            t = t.permute(2, 0, 1).contiguous()
+    else:
+        t = t.float()
+    if t.ndim and t.shape[0] != 1:  # add batch dim if not already batched
+        t = t.unsqueeze(0)
+    return t.to(device)
+
+
 def _observation_to_batch(obs: dict, instruction: str, device):
     """Shape a robot observation dict into the batch SmolVLA.select_action expects.
 
@@ -131,14 +188,10 @@ def _observation_to_batch(obs: dict, instruction: str, device):
     returns overhead/wrist keys, which we rename to the camera1/camera2 the policy was
     trained on before moving to device.
     """
-    import torch
     batch = {}
     for k, v in obs.items():
         key = _CAMERA_RENAME.get(k, k)
-        if isinstance(v, torch.Tensor):
-            batch[key] = v.to(device)
-        else:  # numpy image / state -> tensor
-            batch[key] = torch.as_tensor(v).to(device)
+        batch[key] = _prep_value(key, v, device)
     batch["task"] = [instruction]
     return batch
 
@@ -155,6 +208,7 @@ class SO101Runner:
         print(f"[run_policy] device={self.device} control_hz={self.control_hz}")
 
         self.policy = _load_smolvla(rt["policy_path"], self.device)
+        _apply_action_horizon(self.policy, rt)
         self.robot = _build_robot(self.cfg["robot"])
         print("[run_policy] robot connected, policy loaded.")
 
@@ -175,6 +229,8 @@ class SO101Runner:
                 batch = _observation_to_batch(obs, instruction, self.device)
                 with torch.no_grad():
                     action = self.policy.select_action(batch)  # returns next action
+                if hasattr(action, "squeeze"):
+                    action = action.squeeze(0).to("cpu")  # drop batch dim for the robot
                 # VERIFY: send_action expects a dict/tensor matching robot.action_features
                 self.robot.send_action(action)
                 # maintain the control period

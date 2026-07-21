@@ -81,7 +81,13 @@ runtime:
   device: auto                 # auto -> mps on the M3, else cpu
   control_hz: 30               # per-step execution rate of the SmolVLA action chunk (§10.3)
   max_episode_steps: 900       # ~30 s at 30 Hz before the rollout times out
-  chunk_execution: full        # execute the full predicted chunk, or "replan" every step
+  # Action horizon: how many actions from each predicted chunk to execute open-loop
+  # before re-observing and re-planning. SmolVLA's default (~chunk_size, ~50) replays
+  # a ~1.6 s chunk BLIND to the cameras -> erratic "acts on a stale plan then wanders"
+  # motion on a real arm. Lower = more reactive/closed-loop (more inference calls). If
+  # a rollout is jittery/inconsistent, drop this first. Try 5-10; 1 == fully closed-loop.
+  n_action_steps: 10
+  chunk_execution: full        # legacy: "replan" == n_action_steps 1 (n_action_steps wins if set)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Training — SmolVLA fine-tune from the pretrained base (RunPod GPU, Phase 2).

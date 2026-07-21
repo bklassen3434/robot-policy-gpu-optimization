@@ -1,7 +1,7 @@
 # Path B — Current Status & Next Steps (handoff)
 
 Living status doc for the physical SO-101 + SmolVLA work. Read this first, then
-`docs/PATH_B_PLAN.md` for the full plan. **Last updated: 2026-07-19.**
+`docs/PATH_B_PLAN.md` for the full plan. **Last updated: 2026-07-20.**
 
 ## TL;DR — where we are
 - Goal: fine-tune **SmolVLA** so a physical **SO-101** picks the object you *name*
@@ -9,11 +9,20 @@ Living status doc for the physical SO-101 + SmolVLA work. Read this first, then
   object selection. See `docs/PATH_B_PLAN.md`.
 - **Phase 1 (data collection) is DONE.** Dataset **`bklassen3434/so101_pick_object_20260713_221513`**
   (public HF Hub): **90 episodes, balanced 30/30/30** (pen / keys / sanitizer), 41,070 frames.
-- **Phase 2 (SmolVLA fine-tune on RunPod) is essentially done.** Fine-tuned model on the Hub at
-  **`bklassen3434/smolvla_so101`** (public). Trained to 10k/20k steps, resumed to 20k (loss ≈0.04).
-  See "Phase 2 — the RunPod recipe that actually worked" below; `scripts/runpod_smolvla.sh` now
-  encodes it (fresh-run + resume).
-- **Next: Phase 3 typed eval on the arm** (`make run-typed`), then Phase 4 voice.
+- **Phase 2 (SmolVLA fine-tune on RunPod) is DONE.** Completed the full **20,000 steps**
+  (final loss ≈**0.023**, plateaued from ~step 17k). Final model pushed to the Hub at
+  **`bklassen3434/smolvla_so101`** (public) — end-of-run `push_to_hub` commit "Upload policy
+  weights, train config and readme" landed **2026-07-20 04:51 UTC**. The run survived two
+  interruptions via network-volume resume (10k → 15k → 20k); the `autostop` watcher stopped the
+  pod on completion. **The RunPod pod AND the `lqsnzyd0x6` network volume have since been
+  terminated** — everything needed lives on the Hub. See "Phase 2 — the RunPod recipe that
+  actually worked" below; `scripts/runpod_smolvla.sh` encodes it (fresh-run + resume) if you ever
+  need to re-train (you'd provision a fresh volume).
+- **Phase 3 (eval on the arm) — model VERIFIED GOOD; blocked on inference latency, NOT training.**
+  First on-arm rollouts looked broken (erratic/jerky). An offline check proved the policy is
+  excellent (reproduces teleop to <1°); the jerkiness is purely that SmolVLA is too slow to close
+  a 30 Hz loop on the Mac. **Do not re-collect data or re-train.** See "Phase 3 — eval findings"
+  below. Next real step: **async GPU inference** for smooth real-time, then Phase 4 voice.
 
 ## Two repos / two machines (important)
 1. **This repo** (`robot-policy-gpu-optimization`, workspace `basseterre`, branch
@@ -124,9 +133,10 @@ Every one of these was a wall we hit — do not regress them:
 
 ### Recovery / resume (learned the hard way)
 - The pod was **terminated twice** — once by RunPod when the account **balance hit $0** (auto-terminate),
-  which wipes the container disk. **Fix: mount a network volume at `/workspace`** (ours: `lqsnzyd0x6`,
-  50GB, CA-MTL-3) so `outputs/`, the HF cache, and the LeRobot checkout survive. Checkpoints save every
-  5k steps to the volume.
+  which wipes the container disk. **Fix: mount a network volume at `/workspace`** (ours was `lqsnzyd0x6`,
+  50GB, CA-MTL-3 — **now deleted**, since training finished) so `outputs/`, the HF cache, and the
+  LeRobot checkout survive. Checkpoints save every 5k steps to the volume. To re-train, provision a
+  fresh volume and re-run the script.
 - **Resume:** re-run `scripts/runpod_smolvla.sh` on a fresh pod with the same volume mounted at
   `/workspace`; it auto-detects `outputs/.../checkpoints/last` and runs
   `lerobot-train --config_path=<last>/pretrained_model/train_config.json --resume=true`
@@ -139,15 +149,53 @@ Every one of these was a wall we hit — do not regress them:
   new checkpoint to the Hub as a safety net, and an autostop that `runpodctl stop`s the pod when the
   `train` session ends (needs `runpodctl config --apiKey`).
 
+## Phase 3 — eval findings (2026-07-20): model is GOOD, blocked on inference latency
+**The fine-tune succeeded. The jerky arm is a deployment-speed problem, not a training problem.
+Do NOT re-collect data or re-train based on the on-arm behavior.**
+
+- **Installed LeRobot is 0.5.2.** In this version `lerobot-record` has **no `--policy.*` support** — running
+  a policy on a real robot is done with **`lerobot-rollout`**. Use `--strategy.type=base` for eval-only
+  (no recording; base mode errors if you pass any `--dataset.*`). It ships an **RTC (Real-Time Chunking)
+  inference backend for slow VLAs**: `--inference.type=rtc --inference.rtc.execution_horizon=N`.
+  - **Must** pass `--rename_map='{observation.images.overhead: observation.images.camera1,
+    observation.images.wrist: observation.images.camera2}'` (checkpoint expects camera1/2) or it raises
+    "Visual feature mismatch between policy and robot hardware".
+  - `--inference.rtc.*` flags are **invalid** when `--inference.type=sync` (draccus rejects them).
+- **Offline verification — the decisive test (`scripts/offline_policy_check.py`, run from the ~/lerobot
+  venv).** Pushes real training frames through the EXACT rollout pipeline
+  (`make_pre_post_processors`: Rename→AddBatch→Tokenizer→Device→Normalize, then post Unnormalize) +
+  `select_action`, and compares predicted vs recorded actions. **Result: 0.3–0.9° error on 100–213°
+  joints (<0.5% of range) across a whole episode. Normalization buffers are healthy (no NaN, sensible
+  ranges).** The model, its norm stats, camera mapping, and language conditioning are all correct.
+  (Gotcha: SmolVLA `select_action` does NOT tokenize language — the preprocessor pipeline does; passing a
+  raw `task` string without the pipeline → `KeyError: observation.language.tokens`.)
+- **Root cause of the erratic/jerky arm = inference latency.** SmolVLA (~1B, wraps SmolVLM2-500M):
+  **~8.5 s/action on CPU, ~0.5–0.7 s on MPS** (first call ~1.4 s cold). A 30 Hz control loop needs a new
+  action every 33 ms. The initial RTC attempt used `execution_horizon=10` = 0.33 s of motion at 30 fps,
+  **shorter than one inference**, so each chunk ran dry mid-motion → stall-and-jerk. Tuning
+  `execution_horizon` up (chunk_size=50) helps but on-Mac rollouts were still not smooth enough to
+  demo — the Mac is fundamentally latency-bound on this VLA.
+  - **Rule of thumb:** `execution_horizon > inference_seconds × fps` (≈0.7×30≈21). Try `execution_horizon=30`
+    (1.0 s runway, 20-step RTC overlap), `--device=mps`; ladder = horizon 40, or drop `--fps` to 20
+    (actions are absolute joint targets, so lower fps just slows/​smooths execution — still correct).
+- `src/robopolicy/realbot/run_policy.py` uses plain **sync** `select_action` (no RTC) → the weaker path.
+  It was patched to expose `runtime.n_action_steps` and to fix image preprocessing (CHW/normalize/batch),
+  but for real use drive inference through `lerobot-rollout` RTC or the async server below.
+
 ## Next steps
-1. **Phase 3 — typed eval on the arm.** `make run-typed` (= `python -m robopolicy.realbot.agent --typed
-   --config configs/smolvla_so101.yaml`). Pulls `bklassen3434/smolvla_so101` (public) for inference;
-   config already has real ports + cameras (overhead=0, wrist=1). All 3 objects on the table; type e.g.
-   `pick up the sanitizer`. `run_policy.py` now renames cameras to camera1/camera2 to match training.
-   Run from an env with BOTH this repo (`pip install -e .`) and LeRobot+smolvla. If MPS errors, set
-   `runtime.device: cpu` in the config.
-2. **Phase 4 — voice** (`make run-voice`; `agent.py` uses MLX-Whisper). See the realbot package.
-- If eval is weak: resume for more steps (volume + `training_state` preserved) or collect more/better data.
+1. **Real-time inference on a GPU (the actual Phase 3 unblock).** Run SmolVLA on a rented GPU via
+   **LeRobot async inference** (policy server on the GPU, robot client on the Mac). An A100/4090 does
+   ~50 ms/action → true 30 Hz closed-loop, which the offline results say will work well. This is the
+   proper deployment; the Mac stays as the robot/camera/voice client. (Reuse the RunPod workflow from
+   Phase 2 — provision a fresh pod; the model already lives on the Hub.)
+2. **Interim on-Mac demo (optional):** `lerobot-rollout --strategy.type=base --inference.type=rtc
+   --inference.rtc.execution_horizon=30 --device=mps --fps=20 ...` with the `--rename_map` above — slower,
+   may still be choppy, but exercises the full loop without a GPU.
+3. **Phase 4 — voice** (`make run-voice`; `agent.py` uses MLX-Whisper). Once inference is smooth, wire the
+   voice/agent layer to drive `lerobot-rollout` RTC (or the async client) instead of the sync
+   `run_policy.py` loop.
+- **Do not** treat weak on-arm behavior as "need more data" until inference latency is fixed — the model
+  is already verified good offline (`scripts/offline_policy_check.py`).
 
 ## Key files (this repo)
 - `docs/PATH_B_PLAN.md` — full plan (phases, data budget, rules).
@@ -156,3 +204,6 @@ Every one of these was a wall we hit — do not regress them:
   `..._20260713_221513` (LeRobot auto-appends a timestamp at creation).
 - `src/robopolicy/realbot/{voice,run_policy,agent,detect_cameras}.py`, `record_runbook.md`.
 - `scripts/runpod_smolvla.sh` — RunPod fine-tune setup.
+- `scripts/offline_policy_check.py` — offline "is the model or the robot at fault?" test. Feeds real
+  training frames through the full pre/postprocessor + `select_action`, prints predicted-vs-recorded
+  action error and per-inference latency. Run from the ~/lerobot venv.
